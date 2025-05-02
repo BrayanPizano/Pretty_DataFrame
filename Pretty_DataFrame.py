@@ -1,364 +1,361 @@
 import pandas as pd
 import numpy as np
 import random
-import math
+import os
+import tempfile
+import win32com.client
 
 
-def generate_color():
-    return tuple(random.randint(50, 200) for _ in range(3))
+#Principal
+def generate_excel_table(
+        df_display,
+        group_col=None,
+        col_widths=30,
+        synchronized_panels=False,
+        output_name=r"./styled_table.csv"
+    ):
+    _, ext = os.path.splitext(output_name)
+    if ext.lower() != '.csv':
+        output_name = os.path.splitext(output_name)[0] + '.csv'
+    for col in df_display.select_dtypes(include=['object']).columns:
+        if df_display[col].apply(lambda x: isinstance(x, str) and x.isnumeric()).all():
+            df_display[col] = df_display[col].astype(int)
+    while True: 
+        try: 
+            # df_display.to_excel(output_name, engine='openpyxl')
+            df_display.to_csv(output_name)
+            print(f"Excel file saved to: {os.path.abspath(output_name)}")
+            break 
+        except: 
+            input(f"Cierraa {os.path.abspath(output_name)} y Enter para reintentar...")
+    
+    excel = win32com.client.Dispatch("Excel.Application")
+    excel.Visible = True
+    workbook = excel.Workbooks.Open(os.path.abspath(output_name))
+    posiciones = sorted([df_display.columns.get_loc(col) for col in group_col])
+    posiciones = [x + 2 for x in posiciones]
 
+    timedelta_columns = df_display.dtypes[df_display.dtypes == 'datetime64[ns]'].index
+    timedelta_positions = [df_display.columns.get_loc(col) for col in timedelta_columns]
+    timedelta_positions = [x + 2 for x in timedelta_positions]
+    for i in df_display.columns:
+        if "_id" in i:
+            try:
+                df_display[i] = df_display[i].astype(int)
+            except:
+                print("error en", i)
+    int_positions = df_display.dtypes[df_display.dtypes == 'int64'].index
+    int_positions = [df_display.columns.get_loc(col) for col in int_positions]
+    int_positions = [x + 2 for x in int_positions]
+    vba_code = f"""
+        Sub ColorearDuplicadosConMismoColor()
+            Dim rng As Range
+            Dim cell As Range
+            Dim color As Long
+            Dim dict As Object
+            Dim headerRow As Long
+            Dim columnas As Variant
+            Dim columna As Variant
+            Set dict = CreateObject("Scripting.Dictionary")
+            
+            ' Definir el número de la fila de encabezados (asumimos que es la primera fila)
+            headerRow = 1
+            
+            ' Definir las columnas que queremos analizar ejemplo (columna 4 es D y columna 32 es AF)
+            columnas = Array({str(posiciones)[1:-1]})
+            
+            ' Recorrer las columnas definidas en el arreglo
+            For Each columna In columnas
+                ' Definir el rango que contiene los datos en cada columna (comienza en la fila 2 para ignorar los encabezados)
+                Set rng = Range(Cells(2, columna), Cells(Rows.Count, columna).End(xlUp))
+                
+                ' Recorrer todas las celdas del rango y asignar un color único a cada valor distinto
+                Randomize
+                For Each cell In rng
+                    If Not dict.exists(cell.Value) And cell.Value <> "" Then
+                        ' Asignar un color aleatorio para cada grupo de valores
+                        color = RGB(Int((255 + 1) * Rnd), Int((255 + 1) * Rnd), Int((255 + 1) * Rnd))
+                        dict.Add cell.Value, color ' Guardar el valor y el color asignado
+                    End If
+                Next cell
+                
+                ' Volver a recorrer el rango y aplicar el color del grupo a todas las celdas con el mismo valor
+                For Each cell In rng
+                    If dict.exists(cell.Value) Then
+                        ' Asignar el color previamente asignado al grupo de valores
+                        cell.Interior.color = dict(cell.Value)
+                        ' Calcular el brillo del color de fondo
+                        brightness = 0.299 * (dict(cell.Value) Mod 256) + 0.587 * ((dict(cell.Value) \ 256) Mod 256) + 0.114 * ((dict(cell.Value) \ 65536) Mod 256)
+                        
+                        ' Determinar el color del texto según el brillo del fondo
+                        If brightness > 128 Then
+                            textColor = RGB(0, 0, 0) ' Texto negro para fondos claros
+                        Else
+                            textColor = RGB(255, 255, 255) ' Texto blanco para fondos oscuros
+                        End If
+                        
+                        ' Aplicar el color del texto
+                        cell.Font.Color = textColor
+                    End If
+                Next cell
+                
+                ' Limpiar el diccionario para la siguiente columna
+                dict.RemoveAll
+            Next columna
+            ' ---------------------------------------------------------------------------------
+            ' ---------------------------------------------------------------------------------
+            ' Copiar formato
+            Dim i As Integer, ultimaColumna As Integer
+            Dim rangoOrigen As Range, rangoDestino As Range
+            
+            ' Encontrar la última columna con datos en la hoja activa
+            ultimaColumna = ActiveSheet.Cells(1, Columns.Count).End(xlToLeft).Column
+            
+            ' 1. Copiar formato de la posición 0 del array a la columna 1 hasta la posición 0
+            Set rangoOrigen = ActiveSheet.Columns(columnas(0))
+            If columnas(0) > 1 Then
+                Set rangoDestino = ActiveSheet.Range( _
+                    ActiveSheet.Cells(1, 1), _
+                    ActiveSheet.Cells(1, columnas(0) - 1)).EntireColumn
+                rangoOrigen.Copy
+                rangoDestino.PasteSpecial xlPasteFormats
+                Application.CutCopyMode = False
+            End If
+            
+            ' 2. Copiar formato de la última posición del array hasta la última columna con datos
+            Set rangoOrigen = ActiveSheet.Columns(columnas(UBound(columnas)))
+            If columnas(UBound(columnas)) < ultimaColumna Then
+                Set rangoDestino = ActiveSheet.Range( _
+                    ActiveSheet.Cells(1, columnas(UBound(columnas)) + 1), _
+                    ActiveSheet.Cells(1, ultimaColumna)).EntireColumn
+                rangoOrigen.Copy
+                rangoDestino.PasteSpecial xlPasteFormats
+                Application.CutCopyMode = False
+            End If
+            
+            ' 3. Copiar formato desde columnas(n) hasta columnas(n+1)-1
+            For i = 0 To UBound(columnas) - 1
+                Set rangoOrigen = ActiveSheet.Columns(columnas(i))
+                
+                ' Solo si hay un espacio entre las columnas del array
+                If columnas(i + 1) - columnas(i) > 1 Then
+                    Set rangoDestino = ActiveSheet.Range( _
+                        ActiveSheet.Cells(1, columnas(i) + 1), _
+                        ActiveSheet.Cells(1, columnas(i + 1) - 1)).EntireColumn
+                    rangoOrigen.Copy
+                    rangoDestino.PasteSpecial xlPasteFormats
+                    Application.CutCopyMode = False
+                End If
+            Next i
+            ' ---------------------------------------------------------------------------------
+            ' ---------------------------------------------------------------------------------
 
-def get_contrasting_color(rgb):
-    r, g, b = rgb
-    brightness = (r * 299 + g * 587 + b * 114) / 1000
-    return (0, 0, 0) if brightness > 125 else (255, 255, 255)
+            'Filtro en encabezados
+            ActiveWindow.Panes(1).Activate
+            Range("A1").Select
+            Selection.AutoFilter
+            ' ---------------------------------------------------------------------------------
+            ' ---------------------------------------------------------------------------------
+            Dim ws As Worksheet
+            Dim y As Integer
+            Dim col As Integer
+            ' Definir el array con las columnas a las que aplicar el formato (por ejemplo, columna 1 = A, columna 2 = B, etc.)
+            columnas = Array({str(timedelta_positions)[1:-1]}) ' Cambia estos números por los índices de las columnas que deseas formatear
+            Set ws = ActiveSheet
+            ' Recorrer las columnas en el array
+            For y = LBound(columnas) To UBound(columnas)
+                col = columnas(y)
+                
+                ' Aplicar el formato de fecha con hora a toda la columna
+                ws.Columns(col).NumberFormat = "dd/mm/yyyy HH:mm:ss"
+            Next y
 
+            Dim y2 As Integer
+            Dim col2 As Integer
+            Dim columnas2 As Variant
+            columnas2 = Array({str(int_positions)[1:-1]})
+            For y2 = LBound(columnas2) To UBound(columnas2)
+                col2 = columnas2(y2)
+                ws.Columns(col2).NumberFormat = "0"
+            Next y2
 
-def ansi_style(text, bg=None, fg=None):
-    seq = ""
-    if bg:
-        seq += f"\033[48;2;{bg[0]};{bg[1]};{bg[2]}m"
-    if fg:
-        seq += f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m"
-    return f"{seq}{text}\033[0m"
+            ' ---------------------------------------------------------------------------------
+            ' ---------------------------------------------------------------------------------
+            Dim rango As Range
+            Dim celda As Range
+            Set rango = ActiveSheet.Range("A1").CurrentRegion
+            For Each celda In rango
+                If IsEmpty(celda.Value) Then
+                    celda.Value = " "
+                End If
+            Next celda
 
+    """
 
-def truncate_text(text, max_length):
-    if len(text) <= max_length:
-        return text
-    return text[:max_length - 3] + "..."
+    if synchronized_panels:
+        vba_code += f"""
+            Dim primeraColumnaVisible As Integer
+            Dim ultimaColumnaVisible As Integer
+            Dim columnasVisibles As Integer
+            Dim mitadColumnaVisible As Integer
+            
+            ' Obtener las columnas visibles en el rango de la ventana activa
+            primeraColumnaVisible = ActiveWindow.VisibleRange.Columns(1).Column
+            ultimaColumnaVisible = ActiveWindow.VisibleRange.Columns(ActiveWindow.VisibleRange.Columns.Count).Column
+            
+            ' Calcular la cantidad de columnas visibles
+            columnasVisibles = ultimaColumnaVisible - primeraColumnaVisible + 1
+            
+            ' Calcular la columna en la mitad de las visibles
+            mitadColumnaVisible = primeraColumnaVisible + (columnasVisibles \\ 2) - 1
+            
+            ' Seleccionamos la celda en la mitad de las columnas visibles en la fila 2
+            Cells(2, mitadColumnaVisible).Select
+            
+            ' Configuramos el Split para que se divida en la columna de la mitad
+            With ActiveWindow
+                .SplitColumn = mitadColumnaVisible - 1 ' Columna donde se quiere hacer el split (0-indexed)
+                .SplitRow = 1 ' Fila donde se hace el split
+            End With
+        """
+    
+    vba_code += """
+    End Sub
+    """
+    """
+    vba_code +=
+    Option Explicit
 
+    Private PrevRow As Long
+    Private CellBackColors() As Long
+    Private CellFontColors() As Long
+    Private HighlightColor As Long
+    Private HighlightFontColor As Long
 
-def handle_nan_value(value, nan_placeholder="N/A"):
-    """Handle NaN or None values with a placeholder"""
-    if pd.isna(value):
-        return nan_placeholder
-    return str(value)
+    Sub Workbook_Open()
+        ' Establecer el color de resaltado (puedes cambiarlo)
+        HighlightColor = RGB(0, 0, 0) ' Color negro
+        HighlightFontColor = RGB(255, 255, 255) ' Color azul oscuro para la letra
+        
+        ' Inicializar valores
+        PrevRow = 0
+        
+        ' Configurar eventos
+        Application.EnableEvents = True
+    End Sub
 
+    Private Sub Worksheet_SelectionChange(ByVal Target As Range)
+        Application.EnableEvents = False
+        
+        ' Obtener la fila actual
+        Dim CurrentRow As Long
+        CurrentRow = Target.Row
+        
+        ' Si la fila anterior es diferente a la actual
+        If PrevRow <> CurrentRow Then
+            ' Restaurar colores de la fila anterior
+            If PrevRow > 0 Then
+                RestoreRowFormat (PrevRow)
+            End If
+            
+            ' Guardar formato de la fila actual
+            SaveRowFormat (CurrentRow)
+            
+            ' Resaltar la fila actual
+            HighlightRow (CurrentRow)
+            
+            ' Actualizar la fila anterior
+            PrevRow = CurrentRow
+        End If
+        
+        Application.EnableEvents = True
+    End Sub
 
-def draw_table_border(widths, style="ascii", is_header=False):
-    """Draw table borders using ASCII or Unicode characters"""
-    if style == "none":
-        return ""
+    Private Sub SaveRowFormat(RowNum As Long)
+        Dim LastCol As Long
+        LastCol = ActiveSheet.UsedRange.Columns.Count
+        
+        ' Redimensionar los arrays
+        ReDim CellBackColors(1 To LastCol)
+        ReDim CellFontColors(1 To LastCol)
+        
+        ' Guardar los colores originales
+        Dim i As Long
+        For i = 1 To LastCol
+            CellBackColors(i) = ActiveSheet.Cells(RowNum, i).Interior.color
+            CellFontColors(i) = ActiveSheet.Cells(RowNum, i).Font.color
+        Next i
+    End Sub
 
-    # Character sets for different border styles
-    border_chars = {
-        "ascii": {
-            "top_left": "+", "top_right": "+", "bottom_left": "+", "bottom_right": "+",
-            "top_middle": "+", "bottom_middle": "+", "left_middle": "+", "right_middle": "+",
-            "middle": "+", "horizontal": "-", "vertical": "|"
-        },
-        "unicode": {
-            "top_left": "┌", "top_right": "┐", "bottom_left": "└", "bottom_right": "┘",
-            "top_middle": "┬", "bottom_middle": "┴", "left_middle": "├", "right_middle": "┤",
-            "middle": "┼", "horizontal": "─", "vertical": "│"
-        },
-        "unicode_heavy": {
-            "top_left": "┏", "top_right": "┓", "bottom_left": "┗", "bottom_right": "┛",
-            "top_middle": "┳", "bottom_middle": "┻", "left_middle": "┣", "right_middle": "┫",
-            "middle": "╋", "horizontal": "━", "vertical": "┃"
-        }
-    }
+    Private Sub RestoreRowFormat(RowNum As Long)
+        Dim LastCol As Long
+        LastCol = UBound(CellBackColors)
+        
+        ' Restaurar los colores originales
+        Dim i As Long
+        For i = 1 To LastCol
+            ActiveSheet.Cells(RowNum, i).Interior.color = CellBackColors(i)
+            ActiveSheet.Cells(RowNum, i).Font.color = CellFontColors(i)
+        Next i
+    End Sub
 
-    chars = border_chars.get(style, border_chars["ascii"])
+    Private Sub HighlightRow(RowNum As Long)
+        Dim LastCol As Long
+        LastCol = ActiveSheet.UsedRange.Columns.Count
+        
+        ' Resaltar la fila con el color elegido
+        Dim i As Long
+        For i = 1 To LastCol
+            ActiveSheet.Cells(RowNum, i).Interior.color = HighlightColor
+            ' Cambiar el color de la letra
+            ActiveSheet.Cells(RowNum, i).Font.color = HighlightFontColor
+        Next i
+    End Sub
+    """
+    vba_module = workbook.VBProject.VBComponents.Add(1)
+    vba_module.CodeModule.AddFromString(vba_code)
+    excel.Application.Run("ColorearDuplicadosConMismoColor")
+    workbook.VBProject.VBComponents.Remove(vba_module)
 
-    # Create the appropriate border line based on position
-    if is_header:
-        middle_char = chars["middle"]
-        left_char = chars["left_middle"]
-        right_char = chars["right_middle"]
-    else:
-        if is_header is None:  # Top border
-            middle_char = chars["top_middle"]
-            left_char = chars["top_left"]
-            right_char = chars["top_right"]
-        else:  # Bottom border
-            middle_char = chars["bottom_middle"]
-            left_char = chars["bottom_left"]
-            right_char = chars["bottom_right"]
+    # worksheet_module = workbook.VBProject.VBComponents("Sheet1")  # Asume que estás trabajando con Sheet1
+    # worksheet_module.CodeModule.AddFromString(worksheet_code)
+    # workbook.Save()
+    # workbook.Close(SaveChanges=True)
+    # excel.Quit()
+    return
 
-    result = left_char
-    for i, width in enumerate(widths):
-        result += chars["horizontal"] * (width + 2)  # +2 for padding spaces
-        result += middle_char if i < len(widths) - 1 else right_char
-
-    return result
-
-
-def find_column_with_fewest_unique_values(df):
-    """Find the column with the fewest unique values to use as default grouping column"""
-    if df.empty or len(df.columns) == 0:
-        return None
-
-    # Calculate the number of unique values in each column
-    unique_counts = {col: df[col].nunique() for col in df.columns}
-
-    # Find the column with the minimum number of unique values
-    min_col = min(unique_counts, key=unique_counts.get)
-
-    # Only use columns with at least 2 unique values and less than half the number of rows
-    good_cols = {col: count for col, count in unique_counts.items()
-                 if count >= 2 and count < len(df) / 2}
-
-    if good_cols:
-        return min(good_cols, key=good_cols.get)
-
-    return min_col
 
 
 def print_colored_df(
         df,
         group_col=None,
-        special_col=None,
-        style_mode="background",
-        persist_special_color=False,
-        max_column_width=20,
-        separator="  ",
-        border_style="none",
-        nan_placeholder="N/A",
-        page_size=None,
-        current_page=1,
-        group_pagination=None
-):
-    """
-    Display a DataFrame with colored formatting and various display options.
+        max_column_width=30,
+        output_format="terminal",
+        synchronized_panels=False,
+        output_name = r"./styled_table.csv"
+    ):
+    df_display = df.copy()
+    if len(df_display) == 0:
+        print("Len df 0")
+        return
+    if isinstance(group_col, str):
+        group_col = [group_col]
+    group_col = [col for col in group_col if col in df_display.columns]
+    if (group_col == None) or (len(group_col) == 0):
+        group_col = df_display.columns[:1]
 
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        The DataFrame to display
-    group_col : str, optional
-        Column name used for grouping rows by color. If None, the column with fewest unique values is used
-    special_col : str, optional
-        Column name for special highlighting. If None, no special highlighting is applied
-    style_mode : str, default="background"
-        "background" for colored backgrounds, "text" for colored text
-    persist_special_color : bool, default=False
-        Whether to apply special color to columns after special_col
-    max_column_width : int, default=20
-        Maximum width for any column
-    separator : str, default="  "
-        Separator string between columns
-    border_style : str, default="none"
-        Border style: "none", "ascii", "unicode", or "unicode_heavy"
-    nan_placeholder : str, default="N/A"
-        String to display for NaN values
-    page_size : int, optional
-        Number of rows per page (None for all rows)
-    current_page : int, default=1
-        Current page to display when using pagination
-    group_pagination : str or list, optional
-        If provided, pagination will be by group(s) instead of row numbers:
-        - If str: Show data for the specified group value
-        - If list: Show data for the specified group values
-        - If None: Pagination based on page_size and current_page
-    """
-
-    # Make a copy of the dataframe to avoid modifying the original
-    df_full = df.copy()
-
-    # Auto-select group_col if not specified
-    if group_col is None:
-        group_col = find_column_with_fewest_unique_values(df_full)
-        if group_col:
-            print(f"Auto-selected '{group_col}' as group column (fewest unique values: {df_full[group_col].nunique()})")
-        else:
-            print(f"Warning: Couldn't find a suitable grouping column. Using index instead.")
-            df_full.reset_index(inplace=True)
-            group_col = 'index'
-
-    # Handle missing group column
-    if group_col not in df_full.columns:
-        print(f"Warning: group_col '{group_col}' not found in DataFrame. Using index instead.")
-        df_full.reset_index(inplace=True)
-        group_col = 'index'
-
-    # Handle special_col
-    if special_col is not None and special_col not in df_full.columns:
-        print(f"Warning: special_col '{special_col}' not found in DataFrame. Not applying special highlighting.")
-        special_col = None
-
-    # Process group pagination if specified
-    if group_pagination is not None:
-        # Get all unique group values for reference
-        all_groups = sorted(df_full[group_col].unique())
-
-        if isinstance(group_pagination, (str, int, float)):
-            # Single group specified
-            group_pagination = [group_pagination]
-
-        # Filter dataframe to only include specified groups
-        df_display = df_full[df_full[group_col].isin(group_pagination)].copy()
-
-        if len(df_display) == 0:
-            print(f"No data found for group(s): {group_pagination}")
-            print(f"Available groups: {all_groups}")
-            return
-
-        # Show info about which groups are being displayed
-        total_groups = len(all_groups)
-        current_groups = group_pagination
-
-        group_info = f"Showing {len(current_groups)} of {total_groups} groups: {current_groups}"
-
-    else:
-        # Standard row-based pagination
-        total_rows = len(df_full)
-
-        if page_size is not None:
-            total_pages = math.ceil(total_rows / page_size)
-            current_page = max(1, min(current_page, total_pages))
-            start_idx = (current_page - 1) * page_size
-            end_idx = min(start_idx + page_size, total_rows)
-            df_display = df_full.iloc[start_idx:end_idx].copy()
-
-            # Pagination info for row-based pagination
-            group_info = f"Page {current_page} of {total_pages} | Rows {start_idx + 1}-{end_idx} of {total_rows}"
-        else:
-            df_display = df_full.copy()
-            group_info = f"Showing all {len(df_full)} rows"
-
-    # Calculate column widths with maximum limit
-    col_widths = {}
-    for col in df_display.columns:
-        header_len = len(str(col))
-        # Handle NaN values when calculating width
-        max_data_len = df_display[col].apply(lambda x: len(handle_nan_value(x, nan_placeholder))).max()
-        col_widths[col] = min(max(header_len, max_data_len), max_column_width)
-
-    # Widths list for border drawing
-    widths_list = [col_widths[col] for col in df_display.columns]
-
-    # Generate colors for groups
-    group_colors = {g: generate_color() for g in df_full[group_col].unique()}
-
-    # Generate colors for special values only if special_col is specified
-    special_colors = {}
-    if special_col is not None:
-        special_colors = {s: generate_color() for s in df_full[special_col].dropna().unique()}
-        # Add a default color for NaN values in special column
-        special_colors[np.nan] = generate_color()
-
-    # Get border characters if needed
-    if border_style != "none":
-        border_chars = {
-            "ascii": {"vertical": "|"},
-            "unicode": {"vertical": "│"},
-            "unicode_heavy": {"vertical": "┃"}
-        }
-        border_char = border_chars.get(border_style, {"vertical": "|"})["vertical"]
-
-    # Draw top border if needed
-    if border_style != "none":
-        print(draw_table_border(widths_list, border_style, is_header=None))
-
-    # Print header
-    header_parts = []
-    for col in df_display.columns:
-        col_str = str(col)
-        if len(col_str) > col_widths[col]:
-            col_str = truncate_text(col_str, col_widths[col])
-        header_parts.append(f"{col_str:<{col_widths[col]}}")
-
-    if border_style != "none":
-        header = f"{border_char} " + f" {border_char} ".join(header_parts) + f" {border_char}"
-    else:
-        header = separator.join(header_parts)
-
-    print(header)
-
-    # Draw header separator if using borders
-    if border_style != "none":
-        print(draw_table_border(widths_list, border_style, is_header=True))
-
-    # Print rows
-    for _, row in df_display.iterrows():
-        group_val = row[group_col]
-
-        # Get the base color for this row based on its group
-        row_color = group_colors[group_val]
-        text_color = get_contrasting_color(row_color)
-
-        row_str = ""
-
-        # Start with left border if needed
-        if border_style != "none":
-            row_str += border_char + " "
-
-        # Process each column separately
-        for i, col in enumerate(df_display.columns):
-            # Handle NaN values
-            val = handle_nan_value(row[col], nan_placeholder)
-
-            # Truncate value if too long
-            if len(val) > col_widths[col]:
-                val = truncate_text(val, col_widths[col])
-
-            val = val.ljust(col_widths[col])
-
-            # Set default styling based on group color
-            bg = row_color if style_mode == "background" else None
-            fg = text_color if style_mode == "background" else row_color
-
-            # Apply special coloring if special_col is specified and this column/cell should be special
-            if special_col is not None:
-                special_val = row[special_col]
-                # Make sure NaN is handled properly for color mapping
-                if pd.isna(special_val):
-                    special_val = np.nan
-
-                special_color = special_colors[special_val]
-                special_text_color = get_contrasting_color(special_color)
-
-                is_special = (col == special_col)
-                apply_special = is_special or (persist_special_color and col in df_display.columns[
-                                                                                df_display.columns.get_loc(
-                                                                                    special_col) + 1:])
-
-                # Set coloring based on mode and column
-                if apply_special:
-                    if style_mode == "text":
-                        fg = special_color
-                    else:  # background
-                        bg = special_color
-                        fg = special_text_color
-
-            # Apply style to the column value
-            row_str += ansi_style(val, bg=bg, fg=fg)
-
-            # Add separator or border after the column (except the last one)
-            if i < len(df_display.columns) - 1:
-                if border_style != "none":
-                    # Reset style, then add border character with neutral styling
-                    row_str += "\033[0m " + border_char + " "
-                else:
-                    # Reset style, then add separator with neutral styling
-                    row_str += "\033[0m" + separator
-
-        # Add right border if needed
-        if border_style != "none":
-            row_str += "\033[0m " + border_char
-
-        print(row_str)
-
-    # Draw bottom border if needed
-    if border_style != "none":
-        print(draw_table_border(widths_list, border_style, is_header=False))
-
-    # Print pagination/group info
-    print(f"\n{group_info}")
-
-    # Print pagination/grouping guidance
-    if group_pagination is not None:
-        all_groups = sorted(df_full[group_col].unique())
-        print(f"Available groups: {all_groups}")
-        print(f"Use print_colored_df(..., group_pagination=['group1', 'group2']) to view specific groups")
-    elif page_size is not None:
-        print(f"Use print_colored_df(..., current_page=N) to view other pages")
-    print(f"Use print_colored_df(..., group_pagination='group_name') to view by group")
+     # Handle excel output mode
+    if output_format == "excel":
+        excel_table = generate_excel_table(
+            df_display,
+            group_col,
+            max_column_width,
+            synchronized_panels,
+            output_name
+        )
 
 
-# Example usage with all features including group pagination
+# Modified example function to demonstrate synchronized panels
 def example():
     # Create a test dataframe with some NaN values
     df = pd.DataFrame({
@@ -370,54 +367,20 @@ def example():
         'col4': np.random.randint(0, 100, 18),
         'col5': np.random.randint(0, 100, 18)
     })
-
-    print("\n1. Basic usage with custom separator:")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     style_mode="text", separator=" | ")
-
-    print("\n2. With ASCII borders:")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     style_mode="background", border_style="ascii")
-
-    print("\n3. With Unicode borders and custom NaN placeholder:")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     style_mode="background", border_style="unicode",
-                     nan_placeholder="<NULL>")
-
-    print("\n4. With pagination (page 1):")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     border_style="unicode_heavy", page_size=5, current_page=1)
-
-    print("\n5. With pagination (page 2):")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     border_style="unicode_heavy", page_size=5, current_page=2)
-
-    print("\n6. With group pagination (showing only group 'A'):")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     border_style="unicode", group_pagination="A")
-
-    print("\n7. With multiple group pagination (showing groups 'A' and 'C'):")
-    print_colored_df(df, group_col="Group", special_col="special_col",
-                     border_style="unicode", group_pagination=["A", "C"])
-
-    print("\n8. Auto-selecting group column (no group_col specified):")
-    print_colored_df(df, border_style="unicode")
-
-    print("\n9. No special column specified (everything colored by group):")
-    print_colored_df(df, group_col="Group", border_style="unicode")
-
-    # Create a dataframe with more columns that could be sensible group candidates
-    df2 = pd.DataFrame({
-        'Category': ['Electronics'] * 5 + ['Clothing'] * 3 + ['Books'] * 2,
-        'Status': ['In Stock', 'Low Stock', 'Out of Stock'] * 3 + ['In Stock'],
-        'Price': np.random.randint(10, 200, 10),
-        'Rating': [4.5, 3.8, 4.2, 2.7, 5.0, 4.1, 3.9, 4.8, 3.5, 4.3],
-        'Review': ["Good", "Bad", "Excellent", "Poor", "Perfect"] * 2
-    })
-
-    print("\n10. Auto-selecting group with multiple candidate columns:")
-    print_colored_df(df2, border_style="unicode")
+    
+    print_colored_df(df, group_col=["Group", 'special_col'], output_format='excel', synchronized_panels=True)
 
 
 if __name__ == "__main__":
     example()
+
+    # file_path = os.path.abspath(r'./styled_table.xlsx')
+    # excel = win32com.client.Dispatch("Excel.Application")
+    # excel.Visible = True
+    # workbook = excel.Workbooks.Open(file_path)
+    # vba_code = """
+    # Sub MiMacro()
+    #     MsgBox "¡Hola desde Python!"
+    # End Sub
+    # """
+    # vba_module = workbook.VBProject.VBComponents.Add(1)
